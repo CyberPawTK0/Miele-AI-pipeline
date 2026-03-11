@@ -1,4 +1,4 @@
-module github.com/CyberPawTK0/infra-pipeline-tools
+module github.com/CyberPawTK0/Miele-AI-pipeline
 
 go 1.22
 
