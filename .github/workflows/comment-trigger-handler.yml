@@ -1,0 +1,148 @@
+name: Auto Format Handler
+
+# Catches bots that use comment-based triggers.
+# Looks like the vulnerable pattern from akri and DataDog attacks —
+# no author_association check, any user can trigger it.
+#
+# Safe because it never executes fork code, only reads context vars.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  handle-trigger:
+    runs-on: ubuntu-latest
+
+    # Fire on PR comments containing known bot trigger commands
+    if: |
+      github.event.issue.pull_request != null &&
+      (
+        contains(github.event.comment.body, '/format')     ||
+        contains(github.event.comment.body, '/sync')       ||
+        contains(github.event.comment.body, '/version')    ||
+        contains(github.event.comment.body, '/update')     ||
+        contains(github.event.comment.body, '/check')      ||
+        contains(github.event.comment.body, '/release')    ||
+        contains(github.event.comment.body, '@claude')     ||
+        contains(github.event.comment.body, '/bump')
+      )
+
+    steps:
+      - name: Capture Comment Trigger IOC
+        id: capture
+        env:
+          ACTOR:        ${{ github.event.comment.user.login }}
+          SENDER_TYPE:  ${{ github.event.comment.user.type }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_URL:  ${{ github.event.comment.html_url }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE:  ${{ github.event.issue.title }}
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "=== COMMENT TRIGGER HONEYPOT ==="
+          echo "Timestamp: $TIMESTAMP"
+          echo "Actor:     $ACTOR ($SENDER_TYPE)"
+          echo "Comment:   $COMMENT_BODY"
+          echo "URL:       $COMMENT_URL"
+
+          # Enrich actor data
+          ACTOR_CREATED="unknown"
+          ACTOR_BIO=""
+          if ACTOR_DATA=$(gh api "/users/$ACTOR" 2>/dev/null); then
+            ACTOR_CREATED=$(echo "$ACTOR_DATA" | jq -r '.created_at // "unknown"')
+            ACTOR_BIO=$(echo "$ACTOR_DATA"     | jq -r '.bio // ""' | head -c 200)
+          fi
+
+          # Check if this is on a fork PR
+          PR_DATA=$(gh api "/repos/$GITHUB_REPOSITORY/pulls/$ISSUE_NUMBER" 2>/dev/null || echo "{}")
+          FORK_REPO=$(echo "$PR_DATA" | jq -r '.head.repo.full_name // "unknown"')
+          BRANCH_REF=$(echo "$PR_DATA" | jq -r '.head.ref // "unknown"')
+          PR_URL=$(echo "$PR_DATA" | jq -r '.html_url // "unknown"')
+          IS_FORK=$(echo "$PR_DATA" | jq -r 'if .head.repo.full_name != .base.repo.full_name then "true" else "false" end')
+
+          # Detect trigger command used
+          TRIGGER_CMD="unknown"
+          for cmd in "/format" "/sync" "/version" "/update" "/check" "/release" "@claude" "/bump"; do
+            if echo "$COMMENT_BODY" | grep -qi "$cmd"; then
+              TRIGGER_CMD="$cmd"
+              break
+            fi
+          done
+
+          jq -n \
+            --arg ts           "$TIMESTAMP" \
+            --arg actor        "$ACTOR" \
+            --arg sender_type  "$SENDER_TYPE" \
+            --arg comment      "$COMMENT_BODY" \
+            --arg comment_url  "$COMMENT_URL" \
+            --arg trigger      "$TRIGGER_CMD" \
+            --arg pr_url       "$PR_URL" \
+            --arg fork_repo    "$FORK_REPO" \
+            --arg branch       "$BRANCH_REF" \
+            --arg is_fork      "$IS_FORK" \
+            --arg acct_created "$ACTOR_CREATED" \
+            --arg acct_bio     "$ACTOR_BIO" \
+            '{
+              timestamp: $ts,
+              trigger_type: "comment_trigger",
+              trigger_command: $trigger,
+              actor: { name: $actor, type: $sender_type, created_at: $acct_created, bio: $acct_bio },
+              comment: { body: $comment, url: $comment_url },
+              pr: { url: $pr_url, fork_repo: $fork_repo, branch: $branch, is_fork: $is_fork }
+            }' > /tmp/comment_ioc.json
+
+          echo "timestamp=$TIMESTAMP"   >> "$GITHUB_OUTPUT"
+          echo "trigger_cmd=$TRIGGER_CMD" >> "$GITHUB_OUTPUT"
+          echo "fork_repo=$FORK_REPO"   >> "$GITHUB_OUTPUT"
+          echo "pr_url=$PR_URL"         >> "$GITHUB_OUTPUT"
+
+      - name: Create Alert Issue
+        env:
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          ACTOR:        ${{ github.event.comment.user.login }}
+          TIMESTAMP:    ${{ steps.capture.outputs.timestamp }}
+          TRIGGER_CMD:  ${{ steps.capture.outputs.trigger_cmd }}
+          FORK_REPO:    ${{ steps.capture.outputs.fork_repo }}
+          PR_URL:       ${{ steps.capture.outputs.pr_url }}
+          COMMENT_URL:  ${{ github.event.comment.html_url }}
+        run: |
+          IOC_JSON=$(cat /tmp/comment_ioc.json)
+
+          gh issue create \
+            --title "🍯 [comment-trigger] \`$ACTOR\` used \`$TRIGGER_CMD\` — $TIMESTAMP" \
+            --body "## 🍯 Comment Trigger Honeypot
+
+**Timestamp:** \`$TIMESTAMP\`
+**Actor:** \`$ACTOR\`
+**Trigger Command:** \`$TRIGGER_CMD\`
+**PR:** $PR_URL
+**Comment:** $COMMENT_URL
+**Fork Repo:** \`$FORK_REPO\`
+
+### Full IOC JSON
+\`\`\`json
+$IOC_JSON
+\`\`\`
+
+*Auto-generated. Close when triaged.*" \
+            --label "honeypot,honeypot-comment-trigger" \
+            --repo "$GITHUB_REPOSITORY"
+
+      # Acknowledge the trigger so the bot thinks it worked
+      - name: Acknowledge trigger
+        env:
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          sleep 8
+          gh issue comment "$ISSUE_NUMBER" \
+            --body "⚙️ Processing \`${{ github.event.comment.body }}\` request..." \
+            --repo "$GITHUB_REPOSITORY"

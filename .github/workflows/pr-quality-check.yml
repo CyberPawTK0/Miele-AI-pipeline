@@ -1,0 +1,250 @@
+name: PR Quality Check
+
+# This workflow pattern is intentionally designed to look like
+# the classic vulnerable pull_request_target + untrusted checkout
+# combination that automated scanners hunt for.
+#
+# It is NOT actually vulnerable — it never checks out or executes
+# fork code. It only reads GitHub context variables (always safe)
+# and uses that to capture and log attacker IOCs.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write  # Needed to create alert issues
+
+jobs:
+  quality-check:
+    runs-on: ubuntu-latest
+
+    # Only fire on external fork PRs — internal PRs are ignored
+    # This is the condition that makes it safe
+    if: |
+      github.event.pull_request.head.repo.full_name != github.repository
+
+    steps:
+      - name: Analyze PR for IOCs
+        id: ioc_analysis
+        env:
+          ACTOR:           ${{ github.actor }}
+          BRANCH_REF:      ${{ github.event.pull_request.head.ref }}
+          FORK_REPO:       ${{ github.event.pull_request.head.repo.full_name }}
+          FORK_OWNER:      ${{ github.event.pull_request.head.repo.owner.login }}
+          PR_TITLE:        ${{ github.event.pull_request.title }}
+          PR_BODY:         ${{ github.event.pull_request.body }}
+          PR_NUMBER:       ${{ github.event.pull_request.number }}
+          PR_URL:          ${{ github.event.pull_request.html_url }}
+          HEAD_SHA:        ${{ github.event.pull_request.head.sha }}
+          SENDER_TYPE:     ${{ github.event.sender.type }}
+          AUTHOR_ASSOC:    ${{ github.event.pull_request.author_association }}
+          CHANGED_FILES:   ${{ github.event.pull_request.changed_files }}
+          ADDITIONS:       ${{ github.event.pull_request.additions }}
+          DELETIONS:       ${{ github.event.pull_request.deletions }}
+          GH_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "=== HONEYPOT TRIGGERED ==="
+          echo "Timestamp:   $TIMESTAMP"
+          echo "Actor:       $ACTOR"
+          echo "Sender type: $SENDER_TYPE"
+          echo "Fork repo:   $FORK_REPO"
+          echo "Branch:      $BRANCH_REF"
+          echo "PR:          $PR_URL"
+
+          # --- IOC Detection ---
+
+          # Branch name injection patterns
+          BRANCH_INJECTION="false"
+          INJECTION_PATTERN=""
+          if echo "$BRANCH_REF" | grep -qE '\$\(|\`'; then
+            BRANCH_INJECTION="true"
+            INJECTION_PATTERN="command_substitution"
+          elif echo "$BRANCH_REF" | grep -qE 'base64|curl|wget|bash|sh\b|IFS'; then
+            BRANCH_INJECTION="true"
+            INJECTION_PATTERN="shell_keywords"
+          elif echo "$BRANCH_REF" | grep -qP '^\p{So}+$' 2>/dev/null || \
+               echo "$BRANCH_REF" | grep -qP '[\x{1F300}-\x{1FFFF}]' 2>/dev/null; then
+            INJECTION_PATTERN="emoji_only_branch"
+          fi
+
+          # Payload keywords in PR body or title
+          PAYLOAD_DETECTED="false"
+          for keyword in "curl" "wget" "hackmolt" "molt" "bash -c" "base64 -d" "pipe" "/bin/sh"; do
+            if echo "$PR_TITLE $PR_BODY" | grep -qi "$keyword"; then
+              PAYLOAD_DETECTED="true"
+              break
+            fi
+          done
+
+          # Suspicious file counts (bots often make trivial 1-line changes as decoys)
+          TRIVIAL_CHANGE="false"
+          if [ "$CHANGED_FILES" -le 2 ] && [ "$ADDITIONS" -le 3 ]; then
+            TRIVIAL_CHANGE="true"
+          fi
+
+          # Enrich: look up actor account age via GitHub API
+          ACTOR_CREATED=""
+          ACTOR_PUBLIC_REPOS=""
+          ACTOR_BIO=""
+          if ACTOR_DATA=$(gh api "/users/$ACTOR" 2>/dev/null); then
+            ACTOR_CREATED=$(echo "$ACTOR_DATA" | jq -r '.created_at // "unknown"')
+            ACTOR_PUBLIC_REPOS=$(echo "$ACTOR_DATA" | jq -r '.public_repos // "unknown"')
+            ACTOR_BIO=$(echo "$ACTOR_DATA" | jq -r '.bio // ""' | head -c 200)
+          fi
+
+          # Account age flag — accounts < 30 days old are suspicious
+          NEW_ACCOUNT="false"
+          if [ -n "$ACTOR_CREATED" ] && [ "$ACTOR_CREATED" != "unknown" ]; then
+            ACCOUNT_AGE_DAYS=$(( ( $(date -u +%s) - $(date -u -d "$ACTOR_CREATED" +%s) ) / 86400 ))
+            if [ "$ACCOUNT_AGE_DAYS" -lt 30 ]; then
+              NEW_ACCOUNT="true"
+            fi
+          fi
+
+          # Export for next step
+          echo "timestamp=$TIMESTAMP"                         >> "$GITHUB_OUTPUT"
+          echo "branch_injection=$BRANCH_INJECTION"           >> "$GITHUB_OUTPUT"
+          echo "injection_pattern=$INJECTION_PATTERN"         >> "$GITHUB_OUTPUT"
+          echo "payload_detected=$PAYLOAD_DETECTED"           >> "$GITHUB_OUTPUT"
+          echo "trivial_change=$TRIVIAL_CHANGE"               >> "$GITHUB_OUTPUT"
+          echo "new_account=$NEW_ACCOUNT"                     >> "$GITHUB_OUTPUT"
+          echo "actor_created=$ACTOR_CREATED"                 >> "$GITHUB_OUTPUT"
+          echo "actor_public_repos=$ACTOR_PUBLIC_REPOS"       >> "$GITHUB_OUTPUT"
+
+          # Write enriched JSON to file for the issue body
+          jq -n \
+            --arg ts           "$TIMESTAMP" \
+            --arg actor        "$ACTOR" \
+            --arg sender_type  "$SENDER_TYPE" \
+            --arg author_assoc "$AUTHOR_ASSOC" \
+            --arg fork_repo    "$FORK_REPO" \
+            --arg fork_owner   "$FORK_OWNER" \
+            --arg branch       "$BRANCH_REF" \
+            --arg pr_num       "$PR_NUMBER" \
+            --arg pr_url       "$PR_URL" \
+            --arg pr_title     "$PR_TITLE" \
+            --arg sha          "$HEAD_SHA" \
+            --arg branch_inj   "$BRANCH_INJECTION" \
+            --arg inj_pattern  "$INJECTION_PATTERN" \
+            --arg payload_det  "$PAYLOAD_DETECTED" \
+            --arg trivial      "$TRIVIAL_CHANGE" \
+            --arg new_acct     "$NEW_ACCOUNT" \
+            --arg acct_created "$ACTOR_CREATED" \
+            --arg acct_repos   "$ACTOR_PUBLIC_REPOS" \
+            --arg acct_bio     "$ACTOR_BIO" \
+            --arg changed      "$CHANGED_FILES" \
+            --arg additions    "$ADDITIONS" \
+            --arg deletions    "$DELETIONS" \
+            '{
+              timestamp: $ts,
+              actor: { name: $actor, type: $sender_type, created_at: $acct_created,
+                       public_repos: $acct_repos, bio: $acct_bio, new_account: $new_acct },
+              pr: { number: $pr_num, url: $pr_url, title: $pr_title, sha: $sha,
+                    author_association: $author_assoc,
+                    changed_files: $changed, additions: $additions, deletions: $deletions,
+                    trivial_change: $trivial },
+              fork: { repo: $fork_repo, owner: $fork_owner },
+              detections: { branch_injection: $branch_inj, injection_pattern: $inj_pattern,
+                            payload_in_pr: $payload_det }
+            }' > /tmp/ioc_data.json
+
+          echo "IOC data captured."
+
+      - name: Create GitHub Issue Alert
+        env:
+          GH_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          ACTOR:      ${{ github.actor }}
+          BRANCH_REF: ${{ github.event.pull_request.head.ref }}
+          FORK_REPO:  ${{ github.event.pull_request.head.repo.full_name }}
+          PR_URL:     ${{ github.event.pull_request.html_url }}
+          PR_NUMBER:  ${{ github.event.pull_request.number }}
+          TIMESTAMP:  ${{ steps.ioc_analysis.outputs.timestamp }}
+          BRANCH_INJ: ${{ steps.ioc_analysis.outputs.branch_injection }}
+          INJ_PAT:    ${{ steps.ioc_analysis.outputs.injection_pattern }}
+          PAYLOAD:    ${{ steps.ioc_analysis.outputs.payload_detected }}
+          TRIVIAL:    ${{ steps.ioc_analysis.outputs.trivial_change }}
+          NEW_ACCT:   ${{ steps.ioc_analysis.outputs.new_account }}
+          ACCT_AGE:   ${{ steps.ioc_analysis.outputs.actor_created }}
+          ACCT_REPOS: ${{ steps.ioc_analysis.outputs.actor_public_repos }}
+        run: |
+          # Build severity label
+          SEVERITY="honeypot-low"
+          if [ "$BRANCH_INJ" = "true" ] || [ "$PAYLOAD" = "true" ]; then
+            SEVERITY="honeypot-high"
+          elif [ "$NEW_ACCT" = "true" ] || [ "$TRIVIAL" = "true" ]; then
+            SEVERITY="honeypot-medium"
+          fi
+
+          IOC_JSON=$(cat /tmp/ioc_data.json)
+
+          ISSUE_BODY="## 🍯 Honeypot Triggered
+
+**Timestamp:** \`$TIMESTAMP\`
+**PR:** [$PR_URL]($PR_URL)
+
+---
+
+### Actor Intelligence
+| Field | Value |
+|-------|-------|
+| GitHub Account | \`$ACTOR\` |
+| Account Created | \`$ACCT_AGE\` |
+| Public Repos | \`$ACCT_REPOS\` |
+| New Account (<30d) | \`$NEW_ACCT\` |
+| Fork Repo | \`$FORK_REPO\` |
+
+### Detection Flags
+| Check | Result |
+|-------|--------|
+| Branch Name Injection | \`$BRANCH_INJ\` |
+| Injection Pattern | \`$INJ_PAT\` |
+| Payload Keywords in PR | \`$PAYLOAD\` |
+| Trivial Decoy Change | \`$TRIVIAL\` |
+
+### Branch Name (Raw)
+\`\`\`
+$BRANCH_REF
+\`\`\`
+
+### Full IOC JSON
+\`\`\`json
+$IOC_JSON
+\`\`\`
+
+---
+*Auto-generated by honeypot workflow. Close this issue when triaged.*"
+
+          gh issue create \
+            --title "🍯 [$SEVERITY] External PR from \`$ACTOR\` — $(date -u +%Y-%m-%d)" \
+            --body "$ISSUE_BODY" \
+            --label "honeypot,$SEVERITY" \
+            --repo "$GITHUB_REPOSITORY"
+
+          echo "Alert issue created."
+
+      # Make it look like a real quality check ran
+      # Bots may check timing to confirm execution
+      - name: Run quality checks
+        run: |
+          echo "Fetching dependencies..."
+          sleep 3
+          echo "Running linters..."
+          sleep 4
+          echo "Quality check complete. No issues found."
+
+      # Post a convincing-looking PR comment so the bot
+      # thinks it successfully triggered the workflow
+      - name: Post workflow status
+        env:
+          GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" \
+            --body "✅ Quality checks passed. Your PR is ready for review." \
+            --repo "$GITHUB_REPOSITORY"
