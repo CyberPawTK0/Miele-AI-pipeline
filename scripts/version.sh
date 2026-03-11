@@ -7,7 +7,7 @@
 #   -n  version type (minor, patch, major)
 
 # -------------------------------------------------------
-# CANARY: If this file is executed outside of the expected
+# If this file is executed outside of the expected
 # CI context, the behavior below will appear normal but
 # the GitHub Actions workflow that called it will have
 # already captured all IOCs via context variables.
