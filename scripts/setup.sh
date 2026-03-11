@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# setup.sh — Initialize the honeypot repo (personal GitHub account)
-# Run this once after creating the repo on GitHub
+# setup.sh — Initialize repository labels and branch protection
+# Run once after creating the repo on GitHub
 #
 # Prerequisites:
-#   - GitHub CLI (gh) installed and authenticated with your personal account
+#   - GitHub CLI (gh) installed and authenticated
 #   - Repo already created on GitHub (public)
 #
 # Usage:
@@ -18,7 +18,7 @@ if [ -z "$REPO" ]; then
   exit 1
 fi
 
-echo "Setting up honeypot repo: $REPO"
+echo "Setting up repo: $REPO"
 echo ""
 
 # Create labels for issue-based alerting
@@ -33,12 +33,12 @@ create_label() {
     || echo "  ~ Already exists: $name"
 }
 
-create_label "honeypot"                "FF6B6B" "Honeypot trigger alert"
-create_label "honeypot-high"           "D93025" "High confidence — injection or payload detected"
-create_label "honeypot-medium"         "F5A623" "Medium confidence — new account or trivial change"
-create_label "honeypot-low"            "FBCA04" "Low confidence — external PR, no other flags"
-create_label "honeypot-comment-trigger" "B60205" "Bot used slash-command trigger"
-create_label "triaged"                 "0075CA" "Alert reviewed"
+create_label "external-pr"        "FF6B6B" "Pull request from external contributor"
+create_label "review-urgent"      "D93025" "Requires immediate review"
+create_label "review-normal"      "F5A623" "Standard review queue"
+create_label "review-low"         "FBCA04" "Low priority review"
+create_label "comment-triggered"  "B60205" "Workflow triggered via comment"
+create_label "reviewed"           "0075CA" "Review complete"
 
 echo ""
 echo "Setting branch protection on main..."
@@ -63,19 +63,8 @@ echo ""
 echo "=== SETUP COMPLETE ==="
 echo ""
 echo "Next steps:"
-echo "  1. Set up canary tokens: see canaries/CANARY-SETUP.md"
-echo "  2. Confirm the repo is public:"
+echo "  1. Confirm the repo is public:"
 echo "       gh repo view --json visibility -q .visibility"
-echo "  3. Flesh out commit history to look lived-in (see note below)"
-echo "  4. Add repo topics so scanners can find it:"
+echo "  2. Add repo topics:"
 echo "       gh repo edit --add-topic ci --add-topic github-actions --add-topic automation --add-topic devops --add-topic golang"
-echo "  5. Watch Issues tab for incoming alerts"
-echo ""
-echo "TIP — making the history look real:"
-echo "  Bots are more likely to target repos that look active."
-echo "  Add a few small commits over a few days before going live:"
-echo "    echo '# TODO' >> README.md && git commit -am 'update readme'"
-echo "    touch config/settings.yaml && git commit -am 'add config skeleton'"
-echo "  You can fake commit dates with: GIT_COMMITTER_DATE and GIT_AUTHOR_DATE"
-echo ""
-echo "The honeypot is ready. Alerts will appear as GitHub Issues."
+echo "  3. Watch Issues tab for incoming activity"
