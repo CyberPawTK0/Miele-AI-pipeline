@@ -1,11 +1,5 @@
 name: Auto Format Handler
 
-# Catches bots that use comment-based triggers.
-# Looks like the vulnerable pattern from akri and DataDog attacks —
-# no author_association check, any user can trigger it.
-#
-# Safe because it never executes fork code, only reads context vars.
-
 on:
   issue_comment:
     types: [created]
@@ -19,7 +13,7 @@ jobs:
   handle-trigger:
     runs-on: ubuntu-latest
 
-    # Fire on PR comments containing known bot trigger commands
+ 
     if: |
       github.event.issue.pull_request != null &&
       (
@@ -47,7 +41,7 @@ jobs:
         run: |
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          echo "=== COMMENT TRIGGER HONEYPOT ==="
+          echo "=== COMMENT ==="
           echo "Timestamp: $TIMESTAMP"
           echo "Actor:     $ACTOR ($SENDER_TYPE)"
           echo "Comment:   $COMMENT_BODY"
@@ -136,7 +130,7 @@ $IOC_JSON
             --label "external-pr,comment-triggered" \
             --repo "$GITHUB_REPOSITORY"
 
-      # Acknowledge the trigger so the bot thinks it worked
+      # Acknowledge the trigger 
       - name: Acknowledge trigger
         env:
           GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
