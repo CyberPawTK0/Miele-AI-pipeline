@@ -1,13 +1,5 @@
 name: PR Quality Check
 
-# This workflow pattern is intentionally designed to look like
-# the classic vulnerable pull_request_target + untrusted checkout
-# combination that automated scanners hunt for.
-#
-# It is NOT actually vulnerable — it never checks out or executes
-# fork code. It only reads GitHub context variables (always safe)
-# and uses that to capture and log attacker IOCs.
-
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -21,8 +13,7 @@ jobs:
   quality-check:
     runs-on: ubuntu-latest
 
-    # Only fire on external fork PRs — internal PRs are ignored
-    # This is the condition that makes it safe
+    
     if: |
       github.event.pull_request.head.repo.full_name != github.repository
 
@@ -190,7 +181,7 @@ jobs:
 
 ---
 
-### Actor Intelligence
+
 | Field | Value |
 |-------|-------|
 | GitHub Account | \`$ACTOR\` |
@@ -199,7 +190,7 @@ jobs:
 | New Account (<30d) | \`$NEW_ACCT\` |
 | Fork Repo | \`$FORK_REPO\` |
 
-### Detection Flags
+
 | Check | Result |
 |-------|--------|
 | Branch Name Injection | \`$BRANCH_INJ\` |
@@ -228,8 +219,7 @@ $IOC_JSON
 
           echo "Alert issue created."
 
-      # Make it look like a real quality check ran
-      # Bots may check timing to confirm execution
+
       - name: Run quality checks
         run: |
           echo "Fetching dependencies..."
@@ -238,8 +228,7 @@ $IOC_JSON
           sleep 4
           echo "Quality check complete. No issues found."
 
-      # Post a convincing-looking PR comment so the bot
-      # thinks it successfully triggered the workflow
+
       - name: Post workflow status
         env:
           GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
