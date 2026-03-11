@@ -1,6 +1,6 @@
-# infra-pipeline-tools
+# Miele-AI-pipeline
 
-Automation toolkit for CI/CD pipeline management, version bumping, and infrastructure quality checks.
+Automation toolkit for AI pipeline management, version bumping, and infrastructure quality checks.
 
 ## Overview
 
