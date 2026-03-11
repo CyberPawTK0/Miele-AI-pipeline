@@ -117,8 +117,8 @@ jobs:
           IOC_JSON=$(cat /tmp/comment_ioc.json)
 
           gh issue create \
-            --title "🍯 [comment-trigger] \`$ACTOR\` used \`$TRIGGER_CMD\` — $TIMESTAMP" \
-            --body "## 🍯 Comment Trigger Honeypot
+            --title "[comment-triggered] \`$ACTOR\` used \`$TRIGGER_CMD\` — $TIMESTAMP" \
+            --body "## Comment Trigger Alert
 
 **Timestamp:** \`$TIMESTAMP\`
 **Actor:** \`$ACTOR\`
@@ -132,8 +132,8 @@ jobs:
 $IOC_JSON
 \`\`\`
 
-*Auto-generated. Close when triaged.*" \
-            --label "honeypot,honeypot-comment-trigger" \
+*Auto-generated. Close when reviewed.*" \
+            --label "external-pr,comment-triggered" \
             --repo "$GITHUB_REPOSITORY"
 
       # Acknowledge the trigger so the bot thinks it worked
