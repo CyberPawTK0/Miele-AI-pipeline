@@ -62,8 +62,8 @@ IOCs being published publicly.
 ## Setup
 
 ```bash
-git clone https://github.com/CyberPawTK0/infra-pipeline-tools
-cd infra-pipeline-tools
+git clone https://github.com/CyberPawTK0/Miele-AI-pipeline
+cd Miele-AI-pipeline
 ./scripts/setup.sh
 ```
 
